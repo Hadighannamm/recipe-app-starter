@@ -33,3 +33,4 @@ insert into categories (name) values
 ('Dinner'),
 ('Dessert'),
 ('Drinks');
+

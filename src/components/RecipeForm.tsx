@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import type { Category } from "../types/category";
 import type { NewRecipe, Recipe, RecipeFormData } from "../types/recipe";
+import { uploadRecipeImage } from "../services/recipeService";
 
 type RecipeFormProps = {
   categories: Category[];
@@ -19,6 +20,7 @@ const initialForm: RecipeFormData = {
   description: "",
   prep_time: 0,
   category_id: "",
+  imageFile: undefined,
 };
 
 export default function RecipeForm({
@@ -34,6 +36,8 @@ export default function RecipeForm({
 }: RecipeFormProps) {
   const [form, setForm] = useState<RecipeFormData>(initialForm);
   const [localError, setLocalError] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string>("");
 
   useEffect(() => {
     if (editingRecipe) {
@@ -42,15 +46,31 @@ export default function RecipeForm({
         description: editingRecipe.description,
         prep_time: editingRecipe.prep_time,
         category_id: editingRecipe.category_id.toString(),
+        imageFile: undefined,
       });
+      setPreviewUrl(editingRecipe.image_path || "");
       setLocalError("");
     } else {
       setForm(initialForm);
+      setPreviewUrl("");
     }
   }, [editingRecipe]);
 
   function updateField<K extends keyof RecipeFormData>(key: K, value: RecipeFormData[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) {
+      updateField("imageFile", file);
+      // Create preview URL
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPreviewUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   }
 
   function validate() {
@@ -70,14 +90,37 @@ export default function RecipeForm({
     e.preventDefault();
     if (!validate()) return;
 
+    setIsUploading(true);
+    let imageUrl: string | undefined = undefined;
+
+    // Upload image if provided
+    if (form.imageFile) {
+      const { url, error: uploadError } = await uploadRecipeImage(form.imageFile, form.title);
+      if (uploadError) {
+        setLocalError("Failed to upload image. Recipe will be saved without image.");
+        imageUrl = undefined;
+      } else {
+        imageUrl = url || undefined;
+      }
+    }
+
     if (editingRecipe) {
-      const ok = await onEditRecipe(editingRecipe.id, {
+      const updateData: Partial<NewRecipe> = {
         title: form.title.trim(),
         description: form.description.trim(),
         prep_time: Number(form.prep_time),
         category_id: Number(form.category_id),
-      });
-      if (ok) onCancelEdit();
+      };
+      if (imageUrl) {
+        updateData.image_path = imageUrl;
+      }
+      const ok = await onEditRecipe(editingRecipe.id, updateData);
+      if (ok) {
+        setIsUploading(false);
+        onCancelEdit();
+      } else {
+        setIsUploading(false);
+      }
     } else {
       const recipe: NewRecipe = {
         title: form.title.trim(),
@@ -86,11 +129,19 @@ export default function RecipeForm({
         category_id: Number(form.category_id),
         user_id: userId,
         owner_email: userEmail,
+        image_path: imageUrl,
       };
       const ok = await onAddRecipe(recipe);
-      if (ok) setForm(initialForm);
+      if (ok) {
+        setForm(initialForm);
+        setPreviewUrl("");
+        setIsUploading(false);
+      } else {
+        setIsUploading(false);
+      }
     }
   }
+
 
   return (
     <div className="form-card">
@@ -143,14 +194,47 @@ export default function RecipeForm({
           </div>
         </div>
 
+        <div className="form-group">
+          <label>Recipe Image (optional)</label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleImageChange}
+            disabled={isUploading}
+          />
+          {previewUrl && (
+            <div style={{
+              marginTop: "1rem",
+              width: "100%",
+              maxWidth: "300px",
+              borderRadius: "8px",
+              overflow: "hidden"
+            }}>
+              <img
+                src={previewUrl}
+                alt="Preview"
+                style={{
+                  width: "100%",
+                  height: "auto",
+                  display: "block",
+                  maxHeight: "200px",
+                  objectFit: "cover"
+                }}
+              />
+            </div>
+          )}
+        </div>
+
         {localError && <p className="error-msg">{localError}</p>}
         {error && <p className="error-msg">{error}</p>}
         {successMessage && <p className="success-msg">{successMessage}</p>}
 
         <div style={{ display: "flex", gap: "10px", marginTop: "1rem" }}>
-          <button type="submit">{editingRecipe ? "Save Changes" : "Post Recipe"}</button>
+          <button type="submit" disabled={isUploading}>
+            {isUploading ? "Uploading..." : editingRecipe ? "Save Changes" : "Post Recipe"}
+          </button>
           {editingRecipe && (
-            <button type="button" className="btn-outline" onClick={onCancelEdit}>Cancel Edit</button>
+            <button type="button" className="btn-outline" onClick={onCancelEdit} disabled={isUploading}>Cancel Edit</button>
           )}
         </div>
       </form>
